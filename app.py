@@ -1,43 +1,61 @@
 import streamlit as st
 import numpy as np
-from tensorflow.keras.models import load_model
+import pandas as pd
 import joblib
+import tensorflow as tf
 
-# === Load model & scalers ===
+# ✅ Correct import: get load_model from tf.keras
+from tensorflow.keras.models import load_model
+
+# ------------------------------
+# Load trained model and scalers
+# ------------------------------
 @st.cache_resource
-def load_artifacts():
+def load_resources():
     model = load_model("smartcrowd_bilstm_saved.keras")
-    feature_scaler = joblib.load("feature_scaler.pkl")
-    target_scaler = joblib.load("target_scaler.pkl")
+    feature_scaler = joblib.load("feature_scaler.save")
+    target_scaler = joblib.load("target_scaler.save")
     return model, feature_scaler, target_scaler
 
-model, feature_scaler, target_scaler = load_artifacts()
+model, feature_scaler, target_scaler = load_resources()
 
-st.title("🚦 SmartCrowd: Predicting Public Space Congestion Using BiLSTM")
-st.write("Predict the next hour's crowd level using past 24 hours of data.")
+# ------------------------------
+# Streamlit App
+# ------------------------------
+st.title("📊 SmartCrowd: Predicting Public Space Congestion Using BiLSTM")
 
-# === User input ===
-st.subheader("📊 Enter Last 24 Hours Crowd Counts")
-last_counts = []
-for i in range(24):
-    val = st.number_input(f"Hour -{24-i}", min_value=0, step=1, value=50)
-    last_counts.append(val)
+st.markdown("""
+Upload your recent crowd data (CSV with a `timestamp` column and features).  
+The app will predict the **next congestion level**.
+""")
 
-# === Prediction ===
-if st.button("🔮 Predict Next Hour"):
-    X = np.array(last_counts).reshape(-1, 1)
-    X_scaled = feature_scaler.transform(X)
-    X_scaled = X_scaled.reshape((1, 24, 1))
+uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
 
-    y_pred = model.predict(X_scaled)
-    y_pred_inv = target_scaler.inverse_transform(y_pred)[0, 0]
+if uploaded_file is not None:
+    df = pd.read_csv(uploaded_file, parse_dates=['timestamp'])
 
-    # Categorize
-    if y_pred_inv < 30:
-        category = "🟢 Low"
-    elif y_pred_inv < 70:
-        category = "🟡 Medium"
+    st.write("### Uploaded Data", df.head())
+
+    # Drop timestamp for modeling
+    features = df.drop(columns=['timestamp'])
+    scaled_features = feature_scaler.transform(features)
+
+    # Reshape for BiLSTM input: (samples, timesteps, features)
+    X_input = np.expand_dims(scaled_features, axis=0)
+
+    # Predict
+    pred_scaled = model.predict(X_input)
+    pred = target_scaler.inverse_transform(pred_scaled)
+
+    st.success(f"📈 Predicted Crowd Count: **{int(pred[0][0])}** people")
+
+    # Convert to congestion level
+    if pred[0][0] < 50:
+        level = "🟢 Low"
+    elif pred[0][0] < 150:
+        level = "🟡 Medium"
     else:
-        category = "🔴 High"
+        level = "🔴 High"
 
-    st.success(f"Predicted Crowd Count: **{y_pred_inv:.0f}** → {category}")
+    st.info(f"Predicted Congestion Level: **{level}**")
+

@@ -1,66 +1,72 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
-import tensorflow as tf
-from tensorflow.keras.models import load_model
 import joblib
 
-# -----------------------------
-# Load model + scalers
-# -----------------------------
+# ======================
+# Safe TensorFlow Import
+# ======================
+try:
+    import tensorflow as tf
+    from tensorflow.keras.models import load_model
+except ImportError as e:
+    st.error(f"❌ TensorFlow could not be imported. Error: {e}")
+    st.stop()
+
+# ======================
+# Load Model & Scalers
+# ======================
 @st.cache_resource
-def load_resources():
-    model = load_model("smartcrowd_bilstm.h5")
-    scalers = joblib.load("scalers.pkl")
-    feature_scaler = scalers["feature_scaler"]
-    target_scaler = scalers["target_scaler"]
-    return model, feature_scaler, target_scaler
+def load_artifacts():
+    model = load_model("smartcrowd_bilstm_saved.h5")  # your trained BiLSTM
+    scaler = joblib.load("scaler.pkl")                # MinMaxScaler
+    return model, scaler
 
-model, feature_scaler, target_scaler = load_resources()
+model, scaler = load_artifacts()
 
-# -----------------------------
-# Streamlit App
-# -----------------------------
-st.title("📊 SmartCrowd: Predicting Public Space Congestion Using BiLSTM")
+# ======================
+# Streamlit UI
+# ======================
+st.title("🧠 SmartCrowd: Predicting Public Space Congestion Using BiLSTM")
+st.write("Upload past crowd data or enter recent counts to predict the next step congestion level.")
 
-st.markdown("""
-Upload your recent crowd data (CSV with a `timestamp` column and features).  
-The app will predict the **next congestion level**.
-""")
+# Sidebar for input window
+st.sidebar.header("Input Parameters")
+n_steps = 24  # same as during training
 
-uploaded_file = st.file_uploader("📂 Upload CSV", type=["csv"])
+# Allow manual input of last 24 counts
+st.sidebar.write(f"Enter last {n_steps} crowd counts (people/hour)")
+default_values = [50] * n_steps
+user_values = []
+for i in range(n_steps):
+    val = st.sidebar.number_input(f"Hour -{n_steps - i}", min_value=0, max_value=10000, value=default_values[i])
+    user_values.append(val)
 
-if uploaded_file is not None:
-    # Load CSV
-    df = pd.read_csv(uploaded_file, parse_dates=['timestamp'])
+# Convert to numpy array
+last_window = np.array(user_values).reshape(-1, 1)
 
-    st.write("### 📝 Uploaded Data (first rows)", df.head())
-
-    if "timestamp" not in df.columns:
-        st.error("❌ CSV must contain a 'timestamp' column.")
-    else:
-        # Drop timestamp for prediction
-        features = df.drop(columns=['timestamp'])
-
-        # Scale features
-        scaled_features = feature_scaler.transform(features)
-
-        # Reshape for BiLSTM: (1, timesteps, features)
-        X_input = np.expand_dims(scaled_features, axis=0)
-
+# ======================
+# Prediction
+# ======================
+if st.button("🔮 Predict Congestion"):
+    try:
+        # Scale input
+        scaled_input = scaler.transform(last_window).reshape((1, n_steps, 1))
         # Predict
-        pred_scaled = model.predict(X_input)
-        pred = target_scaler.inverse_transform(pred_scaled)
+        pred_scaled = model.predict(scaled_input)
+        pred = scaler.inverse_transform(pred_scaled)[0, 0]
 
-        # Show result
-        st.success(f"📈 Predicted Crowd Count: **{int(pred[0][0])}** people")
-
-        # Convert to congestion level
-        if pred[0][0] < 50:
+        # Categorize crowd level
+        if pred < 30:
             level = "🟢 Low"
-        elif pred[0][0] < 150:
+        elif pred < 70:
             level = "🟡 Medium"
         else:
             level = "🔴 High"
 
-        st.info(f"Predicted Congestion Level: **{level}**")
+        # Show result
+        st.success(f"Predicted next hour crowd count: **{pred:.0f} people**")
+        st.info(f"Crowd level: {level}")
+
+    except Exception as e:
+        st.error(f"Prediction failed: {e}")
